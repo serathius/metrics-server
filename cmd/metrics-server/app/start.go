@@ -158,67 +158,22 @@ func (o MetricsServerOptions) Run(stopCh <-chan struct{}) error {
 		return err
 	}
 	config.GenericConfig.EnableMetrics = true
-
-	// set up the client config
-	var clientConfig *rest.Config
-	if len(o.Kubeconfig) > 0 {
-		loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: o.Kubeconfig}
-		loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
-
-		clientConfig, err = loader.ClientConfig()
-	} else {
-		clientConfig, err = rest.InClusterConfig()
-	}
+	clientConfig, err := o.clientConfig()
 	if err != nil {
-		return fmt.Errorf("unable to construct lister client config: %v", err)
+		return err
 	}
-	// Use protobufs for communication with apiserver
-	clientConfig.ContentType = "application/vnd.kubernetes.protobuf"
 
-	// set up the informers
-	kubeClient, err := kubernetes.NewForConfig(clientConfig)
+	informerFactory, err := o.InformerFactory(clientConfig)
 	if err != nil {
-		return fmt.Errorf("unable to construct lister client: %v", err)
+		return err
 	}
-	// we should never need to resync, since we're not worried about missing events,
-	// and resync is actually for regular interval-based reconciliation these days,
-	// so set the default resync interval to 0
-	informerFactory := informers.NewSharedInformerFactory(kubeClient, 0)
 
-	// set up the source manager
-	kubeletRestCfg := rest.CopyConfig(clientConfig)
-	if len(o.KubeletCAFile) > 0 {
-		kubeletRestCfg.TLSClientConfig.CAFile = o.KubeletCAFile
-		kubeletRestCfg.TLSClientConfig.CAData = nil
-	}
-	kubeletConfig := summary.GetKubeletConfig(kubeletRestCfg, o.KubeletPort, o.InsecureKubeletTLS, o.DeprecatedCompletelyInsecureKubelet)
-	kubeletClient, err := summary.KubeletClientFor(kubeletConfig)
+	sourceProvider, err := o.SourceProvider(clientConfig, informerFactory)
 	if err != nil {
-		return fmt.Errorf("unable to construct a client to connect to the kubelets: %v", err)
+		return err
 	}
-
-	// set up an address resolver according to the user's priorities
-	addrPriority := make([]corev1.NodeAddressType, len(o.KubeletPreferredAddressTypes))
-	for i, addrType := range o.KubeletPreferredAddressTypes {
-		addrPriority[i] = corev1.NodeAddressType(addrType)
-	}
-	addrResolver := summary.NewPriorityNodeAddressResolver(addrPriority)
-
-	sourceProvider := summary.NewSummaryProvider(informerFactory.Core().V1().Nodes().Lister(), kubeletClient, addrResolver)
-	scrapeTimeout := time.Duration(float64(o.MetricResolution) * 0.90) // scrape timeout is 90% of the scrape interval
-	sources.RegisterDurationMetrics(scrapeTimeout)
-	sourceManager := sources.NewSourceManager(sourceProvider, scrapeTimeout)
-
-	// set up the in-memory sink and provider
-	metricSink, metricsProvider := sink.NewSinkProvider()
-
-	// set up the general manager
-	manager.RegisterDurationMetrics(o.MetricResolution)
-	mgr := manager.NewManager(sourceManager, metricSink, o.MetricResolution)
-
-	// inject the providers into the config
-	config.ProviderConfig.Node = metricsProvider
-	config.ProviderConfig.Pod = metricsProvider
+	o.RegisterMetrics()
+	mgr := o.SetupPipelines(sourceProvider, config)
 
 	// complete the config to get an API server
 	server, err := config.Complete(informerFactory).New()
@@ -235,4 +190,82 @@ func (o MetricsServerOptions) Run(stopCh <-chan struct{}) error {
 	// run everything (the apiserver runs the shared informer factory for us)
 	mgr.RunUntil(stopCh)
 	return server.GenericAPIServer.PrepareRun().Run(stopCh)
+}
+
+func (o MetricsServerOptions) clientConfig() (*rest.Config, error) {
+	// set up the client config
+	var clientConfig *rest.Config
+	var err error
+	if len(o.Kubeconfig) > 0 {
+		loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: o.Kubeconfig}
+		loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
+
+		clientConfig, err = loader.ClientConfig()
+	} else {
+		clientConfig, err = rest.InClusterConfig()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("unable to construct lister client config: %v", err)
+	}
+	// Use protobufs for communication with apiserver
+	clientConfig.ContentType = "application/vnd.kubernetes.protobuf"
+	return clientConfig, nil
+}
+
+func (o MetricsServerOptions) InformerFactory(clientConfig *rest.Config) (informers.SharedInformerFactory, error) {
+	// set up the informers
+	kubeClient, err := kubernetes.NewForConfig(clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("unable to construct lister client: %v", err)
+	}
+	// we should never need to resync, since we're not worried about missing events,
+	// and resync is actually for regular interval-based reconciliation these days,
+	// so set the default resync interval to 0
+	return informers.NewSharedInformerFactory(kubeClient, 0), nil
+}
+
+func (o MetricsServerOptions) SourceProvider(clientConfig *rest.Config, factory informers.SharedInformerFactory) (sources.MetricSourceProvider, error) {
+	// set up the source manager
+	kubeletRestCfg := rest.CopyConfig(clientConfig)
+	if len(o.KubeletCAFile) > 0 {
+		kubeletRestCfg.TLSClientConfig.CAFile = o.KubeletCAFile
+		kubeletRestCfg.TLSClientConfig.CAData = nil
+	}
+	kubeletConfig := summary.GetKubeletConfig(kubeletRestCfg, o.KubeletPort, o.InsecureKubeletTLS, o.DeprecatedCompletelyInsecureKubelet)
+	kubeletClient, err := summary.KubeletClientFor(kubeletConfig)
+	if err != nil {
+		return nil, fmt.Errorf("unable to construct a client to connect to the kubelets: %v", err)
+	}
+
+	// set up an address resolver according to the user's priorities
+	addrPriority := make([]corev1.NodeAddressType, len(o.KubeletPreferredAddressTypes))
+	for i, addrType := range o.KubeletPreferredAddressTypes {
+		addrPriority[i] = corev1.NodeAddressType(addrType)
+	}
+	addrResolver := summary.NewPriorityNodeAddressResolver(addrPriority)
+	return summary.NewSummaryProvider(factory.Core().V1().Nodes().Lister(), kubeletClient, addrResolver), nil
+}
+
+func (o MetricsServerOptions) RegisterMetrics() {
+	manager.RegisterDurationMetrics(o.MetricResolution)
+	sources.RegisterDurationMetrics(o.Timeout())
+}
+
+func (o MetricsServerOptions) SetupPipelines(sourceProvider sources.MetricSourceProvider, config *apiserver.Config) *manager.Manager {
+	sourceManager := sources.NewSourceManager(sourceProvider, o.Timeout())
+
+	// set up the in-memory sink and provider
+	metricSink, metricsProvider := sink.NewSinkProvider()
+
+	// set up the general manager
+	mgr := manager.NewManager(sourceManager, metricSink, o.MetricResolution)
+
+	// inject the providers into the config
+	config.ProviderConfig.Node = metricsProvider
+	config.ProviderConfig.Pod = metricsProvider
+	return mgr
+}
+
+func (o MetricsServerOptions) Timeout() time.Duration {
+	return time.Duration(float64(o.MetricResolution) * 0.90)
 }
