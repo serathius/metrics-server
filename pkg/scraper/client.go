@@ -15,14 +15,16 @@
 package scraper
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 
 	"k8s.io/klog"
 	stats "k8s.io/kubernetes/pkg/kubelet/apis/stats/v1alpha1"
@@ -38,6 +40,7 @@ type kubeletClient struct {
 	port            int
 	deprecatedNoTLS bool
 	client          *http.Client
+	buffers         sync.Pool
 }
 
 type ErrNotFound struct {
@@ -53,14 +56,20 @@ func IsNotFoundError(err error) bool {
 	return isNotFound
 }
 
-func (kc *kubeletClient) makeRequestAndGetValue(client *http.Client, req *http.Request, value interface{}) error {
+func (kc *kubeletClient) makeRequestAndGetValue(client *http.Client, req *http.Request, value interface{})error {
 	// TODO(directxman12): support validating certs by hostname
 	response, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
-	body, err := ioutil.ReadAll(response.Body)
+	buffer := kc.buffers.Get().(*bytes.Buffer)
+	defer func(){
+		buffer.Reset()
+		kc.buffers.Put(buffer)
+	}()
+	_, err = io.Copy(buffer, response.Body)
+	body := buffer.Bytes()
 	if err != nil {
 		return fmt.Errorf("failed to read response body - %v", err)
 	}
@@ -116,5 +125,10 @@ func NewKubeletClient(transport http.RoundTripper, port int, deprecatedNoTLS boo
 		port:            port,
 		client:          c,
 		deprecatedNoTLS: deprecatedNoTLS,
+		buffers:         sync.Pool{
+		New: func()interface{} {
+			return new(bytes.Buffer)
+			},
+		},
 	}, nil
 }

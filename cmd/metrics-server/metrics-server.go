@@ -16,8 +16,11 @@ package main
 
 import (
 	"flag"
+	"log"
+	"net/http"
 	"os"
 	"runtime"
+	_ "net/http/pprof"
 
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/component-base/logs"
@@ -32,7 +35,10 @@ func main() {
 	if len(os.Getenv("GOMAXPROCS")) == 0 {
 		runtime.GOMAXPROCS(runtime.NumCPU())
 	}
-
+	runtime.SetCPUProfileRate(1000000)
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 	cmd := app.NewMetricsServerCommand(genericapiserver.SetupSignalHandler())
 	cmd.Flags().AddGoFlagSet(flag.CommandLine)
 	if err := cmd.Execute(); err != nil {

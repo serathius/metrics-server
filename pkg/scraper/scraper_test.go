@@ -16,7 +16,12 @@ package scraper
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/valyala/fastjson"
+	"github.com/mailru/easyjson"
+	jsoniter "github.com/json-iterator/go"
+	"io/ioutil"
 	"strings"
 	"testing"
 	"time"
@@ -370,3 +375,84 @@ type mockClock struct {
 
 func (c mockClock) Now() time.Time                  { return c.now }
 func (c mockClock) Since(d time.Time) time.Duration { return c.later.Sub(d) }
+
+
+func BenchmarkParseStd(b *testing.B) {
+	b.ReportAllocs()
+	file, err := ioutil.ReadFile("summary.json")
+	if err != nil {
+		b.Error(err)
+	}
+	b.ResetTimer()
+	s := &stats.Summary{}
+	for i := 0; i < b.N; i++ {
+		err := json.Unmarshal(file, s)
+		if err != nil {
+			b.Error(err)
+		}
+	}
+}
+
+//func BenchmarkParseffJson(b *testing.B) {
+//	b.ReportAllocs()
+//	file, err := ioutil.ReadFile("summary.json")
+//	if err != nil {
+//		b.Error(err)
+//	}
+//	b.ResetTimer()
+//	s := &stats.Summary{}
+//	for i := 0; i < b.N; i++ {
+//		err := ffjson.Unmarshal(file, s)
+//		if err != nil {
+//			b.Error(err)
+//		}
+//	}
+//}
+
+func BenchmarkParseEasyJson(b *testing.B) {
+	b.ReportAllocs()
+	file, err := ioutil.ReadFile("summary.json")
+	if err != nil {
+		b.Error(err)
+	}
+	b.ResetTimer()
+	s := &stats.Summary{}
+	for i := 0; i < b.N; i++ {
+		err := easyjson.Unmarshal(file, s)
+		if err != nil {
+			b.Error(err)
+		}
+	}
+}
+
+
+func BenchmarkParseFastJson(b *testing.B) {
+	b.ReportAllocs()
+	file, err := ioutil.ReadFile("summary.json")
+	if err != nil {
+		b.Error(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := fastjson.ParseBytes(file)
+		if err != nil {
+			b.Error(err)
+		}
+	}
+}
+
+func BenchmarkParseJsoniter(b *testing.B) {
+	b.ReportAllocs()
+	file, err := ioutil.ReadFile("summary.json")
+	if err != nil {
+		b.Error(err)
+	}
+	b.ResetTimer()
+	s := &stats.Summary{}
+	for i := 0; i < b.N; i++ {
+		err := jsoniter.Unmarshal(file, s)
+		if err != nil {
+			b.Error(err)
+		}
+	}
+}
