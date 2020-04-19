@@ -15,16 +15,17 @@
 package scraper
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 
-	"k8s.io/klog"
 	stats "k8s.io/kubernetes/pkg/kubelet/apis/stats/v1alpha1"
 )
 
@@ -38,6 +39,7 @@ type kubeletClient struct {
 	port            int
 	deprecatedNoTLS bool
 	client          *http.Client
+	buffers         sync.Pool
 }
 
 type ErrNotFound struct {
@@ -48,11 +50,6 @@ func (err *ErrNotFound) Error() string {
 	return fmt.Sprintf("%q not found", err.endpoint)
 }
 
-func IsNotFoundError(err error) bool {
-	_, isNotFound := err.(*ErrNotFound)
-	return isNotFound
-}
-
 func (kc *kubeletClient) makeRequestAndGetValue(client *http.Client, req *http.Request, value interface{}) error {
 	// TODO(directxman12): support validating certs by hostname
 	response, err := client.Do(req)
@@ -60,28 +57,34 @@ func (kc *kubeletClient) makeRequestAndGetValue(client *http.Client, req *http.R
 		return err
 	}
 	defer response.Body.Close()
-	body, err := ioutil.ReadAll(response.Body)
+	b := kc.getBuffer()
+	defer kc.returnBuffer(b)
+	_, err = io.Copy(b, response.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response body - %v", err)
+		return err
 	}
 	if response.StatusCode == http.StatusNotFound {
 		return &ErrNotFound{req.URL.String()}
 	} else if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("request failed - %q, response: %q", response.Status, string(body))
+		return fmt.Errorf("request failed - %q.", response.Status)
 	}
 
-	kubeletAddr := "[unknown]"
-	if req.URL != nil {
-		kubeletAddr = req.URL.Host
-	}
-	klog.V(10).Infof("Raw response from Kubelet at %s: %s", kubeletAddr, string(body))
-
-	err = json.Unmarshal(body, value)
+	err = json.Unmarshal(b.Bytes(), value)
 	if err != nil {
-		return fmt.Errorf("failed to parse output. Response: %q. Error: %v", string(body), err)
+		return fmt.Errorf("failed to parse output. Error: %v", err)
 	}
 	return nil
 }
+
+func (kc *kubeletClient) getBuffer() *bytes.Buffer {
+	return kc.buffers.Get().(*bytes.Buffer)
+}
+
+func (kc *kubeletClient) returnBuffer(b *bytes.Buffer)  {
+	b.Reset()
+	kc.buffers.Put(b)
+}
+
 
 func (kc *kubeletClient) GetSummary(ctx context.Context, host string) (*stats.Summary, error) {
 	scheme := "https"
@@ -116,5 +119,10 @@ func NewKubeletClient(transport http.RoundTripper, port int, deprecatedNoTLS boo
 		port:            port,
 		client:          c,
 		deprecatedNoTLS: deprecatedNoTLS,
+		buffers:         sync.Pool{
+		New: func()interface{} {
+			return new(bytes.Buffer)
+			},
+		},
 	}, nil
 }
