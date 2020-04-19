@@ -17,7 +17,6 @@ package scraper
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -26,6 +25,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/mailru/easyjson"
 	stats "k8s.io/kubernetes/pkg/kubelet/apis/stats/v1alpha1"
 )
 
@@ -50,7 +50,7 @@ func (err *ErrNotFound) Error() string {
 	return fmt.Sprintf("%q not found", err.endpoint)
 }
 
-func (kc *kubeletClient) makeRequestAndGetValue(client *http.Client, req *http.Request, value interface{}) error {
+func (kc *kubeletClient) makeRequestAndGetValue(client *http.Client, req *http.Request, value easyjson.Unmarshaler) error {
 	// TODO(directxman12): support validating certs by hostname
 	response, err := client.Do(req)
 	if err != nil {
@@ -69,7 +69,7 @@ func (kc *kubeletClient) makeRequestAndGetValue(client *http.Client, req *http.R
 		return fmt.Errorf("request failed - %q.", response.Status)
 	}
 
-	err = json.Unmarshal(b.Bytes(), value)
+	err = easyjson.Unmarshal(b.Bytes(), value)
 	if err != nil {
 		return fmt.Errorf("failed to parse output. Error: %v", err)
 	}
