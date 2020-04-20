@@ -31,7 +31,7 @@ all: _output/$(ARCH)/metrics-server
 src_deps=$(shell find pkg cmd -type f -name "*.go")
 LDFLAGS:=-X sigs.k8s.io/metrics-server/pkg/version.gitVersion=$(GIT_TAG) -X sigs.k8s.io/metrics-server/pkg/version.gitCommit=$(GIT_COMMIT) -X sigs.k8s.io/metrics-server/pkg/version.buildDate=$(BUILD_DATE)
 _output/%/metrics-server: $(src_deps) _output
-	GO111MODULE=on GOARCH=$* CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o _output/$*/metrics-server sigs.k8s.io/metrics-server/cmd/metrics-server
+	GOARCH=$* CGO_ENABLED=0 go build -mod=readonly -ldflags "$(LDFLAGS)" -o _output/$*/metrics-server sigs.k8s.io/metrics-server/cmd/metrics-server
 
 yaml_deps=$(shell find deploy/kubernetes -type f -name "*.yaml")
 _output/components.yaml: $(yaml_deps) _output
@@ -89,9 +89,9 @@ release-manifests: _output/components.yaml
 .PHONY: test-unit
 test-unit:
 ifeq ($(ARCH),amd64)
-	GO111MODULE=on GOARCH=$(ARCH) go test --test.short -race ./pkg/...
+	GO111MODULE=on GOARCH=$(ARCH) go test -mod=readonly --test.short -race ./pkg/...
 else
-	GO111MODULE=on GOARCH=$(ARCH) go test --test.short ./pkg/...
+	GO111MODULE=on GOARCH=$(ARCH) go test -mod=readonly --test.short ./pkg/...
 endif
 
 # Binary tests
@@ -130,7 +130,7 @@ lint:
 ifndef HAS_GOLANGCI
 	curl -sfL https://install.goreleaser.com/github.com/golangci/golangci-lint.sh | sh -s -- -b $(GOPATH)/bin ${GOLANGCI_VERSION}
 endif
-	GO111MODULE=on golangci-lint run
+	golangci-lint run --modules-download-mode=readonly
 
 .PHONY: fmt
 fmt:
