@@ -30,8 +30,6 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1listers "k8s.io/client-go/listers/core/v1"
-
 	stats "k8s.io/kubernetes/pkg/kubelet/apis/stats/v1alpha1"
 )
 
@@ -307,11 +305,6 @@ func (l *fakeNodeLister) List(_ labels.Selector) (ret []*corev1.Node, err error)
 	}
 	// NB: this is ignores selector for the moment
 	return l.nodes, nil
-}
-
-func (l *fakeNodeLister) ListWithPredicate(_ v1listers.NodeConditionPredicate) ([]*corev1.Node, error) {
-	// NB: this is ignores predicate for the moment
-	return l.List(labels.Everything())
 }
 
 func (l *fakeNodeLister) Get(name string) (*corev1.Node, error) {
