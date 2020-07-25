@@ -241,8 +241,7 @@ func (m *podMetrics) getPodMetrics(pods ...*v1.Pod) ([]metrics.PodMetrics, error
 		if containerMetrics[i] == nil {
 			continue
 		}
-
-		res = append(res, metrics.PodMetrics{
+		podMetric := metrics.PodMetrics{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              pod.Name,
 				Namespace:         pod.Namespace,
@@ -251,7 +250,10 @@ func (m *podMetrics) getPodMetrics(pods ...*v1.Pod) ([]metrics.PodMetrics, error
 			Timestamp:  metav1.NewTime(timestamps[i].Timestamp),
 			Window:     metav1.Duration{Duration: timestamps[i].Window},
 			Containers: containerMetrics[i],
-		})
+		}
+		freshness := time.Since(podMetric.Timestamp.Time)
+		metricFreshness.Observe(freshness.Seconds() + podMetric.Window.Seconds())
+		res = append(res, podMetric)
 	}
 	return res, nil
 }

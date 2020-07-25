@@ -124,8 +124,10 @@ func (p *Storage) Store(batch *MetricsBatch) error {
 		}
 		newNodes[nodePoint.Name] = nodePoint
 	}
+	pointsStored.WithLabelValues("node").Set(float64(len(newNodes)))
 
 	newPods := make(map[apitypes.NamespacedName]PodMetricsPoint, len(batch.Pods))
+	containerCount := 0
 	for _, podPoint := range batch.Pods {
 		podIdent := apitypes.NamespacedName{Name: podPoint.Name, Namespace: podPoint.Namespace}
 		if _, exists := newPods[podIdent]; exists {
@@ -133,7 +135,9 @@ func (p *Storage) Store(batch *MetricsBatch) error {
 			continue
 		}
 		newPods[podIdent] = podPoint
+		containerCount += len(podPoint.Containers)
 	}
+	pointsStored.WithLabelValues("container").Set(float64(containerCount))
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

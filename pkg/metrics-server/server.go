@@ -81,6 +81,7 @@ func (ms *MetricsServer) RunUntil(stopCh <-chan struct{}) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ms.runScrape(ctx)
+
 	return ms.GenericAPIServer.PrepareRun().Run(stopCh)
 }
 

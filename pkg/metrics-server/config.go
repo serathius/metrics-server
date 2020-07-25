@@ -15,6 +15,8 @@ package metric_server
 
 import (
 	"fmt"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/component-base/metrics"
 	"time"
 
 	genericapiserver "k8s.io/apiserver/pkg/server"
@@ -26,6 +28,10 @@ import (
 	"sigs.k8s.io/metrics-server/pkg/api"
 	"sigs.k8s.io/metrics-server/pkg/scraper"
 	"sigs.k8s.io/metrics-server/pkg/storage"
+)
+
+var (
+	pointsAvailable metrics.GaugeFunc
 )
 
 type Config struct {
@@ -45,7 +51,8 @@ func (c Config) Complete() (*MetricsServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to construct a client to connect to the kubelets: %v", err)
 	}
-	nodes := informer.Core().V1().Nodes()
+	corev1 := informer.Core().V1()
+	nodes := corev1.Nodes()
 	scrape := scraper.NewScraper(nodes.Lister(), kubeletClient, c.ScrapeTimeout)
 
 	scraper.RegisterScraperMetrics(c.ScrapeTimeout)
@@ -57,9 +64,45 @@ func (c Config) Complete() (*MetricsServer, error) {
 	}
 
 	store := storage.NewStorage()
-	if err := api.Install(store, informer.Core().V1(), genericServer); err != nil {
+	if err := api.Install(store, corev1, genericServer); err != nil {
 		return nil, err
 	}
+
+
+	pointsAvailable = metrics.NewGaugeFunc(
+		metrics.GaugeOpts{
+			Namespace: "metrics_server",
+			Name:      "points_available",
+			Help:      "Number of metrics points that is available in cluster.",
+		},
+		func() float64 {
+			nodeList, err := corev1.Nodes().Lister().List(nil)
+			if err != nil {
+				return 0
+			}
+			nodeCount := 0
+			for _, node := range nodeList {
+				for _, condition := range node.Status.Conditions {
+					if condition.Type == v1.NodeReady && condition.Status == v1.ConditionTrue {
+						nodeCount += 1
+					}
+				}
+			}
+			podList, err := corev1.Pods().Lister().List(nil)
+			if err != nil {
+				return 0
+			}
+			containerCount := 0
+			for _, pod := range podList {
+				for _, status := range pod.Status.ContainerStatuses {
+					if status.State.Running != nil {
+						containerCount += 1
+					}
+				}
+			}
+			return float64(nodeCount + containerCount)
+		},
+	)
 	return &MetricsServer{
 		syncs:            []cache.InformerSynced{nodes.Informer().HasSynced},
 		informer:         informer,
