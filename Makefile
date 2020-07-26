@@ -53,13 +53,13 @@ container-%: pkg/scraper/types_easyjson.go
 # -----------------------------
 
 .PHONY: push
-push: $(addprefix sub-push-,$(ALL_ARCHITECTURES)) push-multi-arch;
+push: push-$(ARCH)
 
-.PHONY: sub-push-*
-sub-push-%: container-% do-push-% ;
+.PHONY: push-all
+push-all: $(addprefix push-,$(ALL_ARCHITECTURES)) push-multi-arch;
 
-.PHONY: do-push-*
-do-push-%:
+.PHONY: push-*
+push-%: container-% 
 	docker tag $(REGISTRY)/metrics-server-$*:$(GIT_COMMIT) $(REGISTRY)/metrics-server-$*:$(GIT_TAG)
 	docker push $(REGISTRY)/metrics-server-$*:$(GIT_TAG)
 

@@ -31,16 +31,17 @@ spec:
         args:
           - --cert-dir=/tmp
           - --secure-port=4443
+          - --metric-resolution=15s
           - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
           - --kubelet-use-node-status-port
         ports:
-        - name: main-port
+        - name: https
           containerPort: 4443
           protocol: TCP
         readinessProbe:
           httpGet:
             path: /healthz
-            port: main-port
+            port: https
             scheme: HTTPS
         securityContext:
           readOnlyRootFilesystem: true
@@ -49,5 +50,36 @@ spec:
         volumeMounts:
         - name: tmp-dir
           mountPath: /tmp
+      - name: metrics-server-nanny
+        image: k8s.gcr.io/addon-resizer:1.8.11
+        resources:
+          limits:
+            cpu: 40m
+            memory: 25Mi
+          requests:
+            cpu: 40m
+            memory: 25Mi
+        env:
+          - name: MY_POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: MY_POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+        command:
+          - /pod_nanny
+          - --cpu=15m
+          - --extra-cpu=1m
+          - --memory=30Mi
+          - --extra-memory=1Mi
+          - --threshold=5
+          - --deployment=metrics-server
+          - --container=metrics-server
+          - --poll-period=300000
+          - --estimator=exponential
+          - --minClusterSize=16
+          - --use-metrics=true
       nodeSelector:
         kubernetes.io/os: linux

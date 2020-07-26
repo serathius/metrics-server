@@ -177,11 +177,11 @@ func (o Options) kubeletConfig(restConfig *rest.Config) *scraper.KubeletClientCo
 	}
 	if o.DeprecatedCompletelyInsecureKubelet {
 		config.Scheme = "http"
-		config.RESTConfig = rest.AnonymousClientConfig(config.RESTConfig) // don't use auth to avoid leaking auth details to insecure endpoints
+		config.RESTConfig = *rest.AnonymousClientConfig(&config.RESTConfig) // don't use auth to avoid leaking auth details to insecure endpoints
 		config.RESTConfig.TLSClientConfig = rest.TLSClientConfig{}        // empty TLS config --> no TLS
 	} else {
 		config.Scheme = "https"
-		config.RESTConfig = rest.CopyConfig(restConfig)
+		config.RESTConfig = *rest.CopyConfig(restConfig)
 	}
 	if o.InsecureKubeletTLS {
 		config.RESTConfig.TLSClientConfig.Insecure = true

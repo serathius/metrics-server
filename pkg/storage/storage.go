@@ -30,7 +30,7 @@ import (
 // CPU usage rate.  While it can vary, it's no more than this number, but may be
 // as low as half this number (when working with no backoff).  It would be really
 // nice if the kubelet told us this in the summary API...
-var kubernetesCadvisorWindow = 30 * time.Second
+var kubernetesCadvisorWindow = 15 * time.Second
 
 // Storage is a thread save storage for node and pod metrics
 type Storage struct {

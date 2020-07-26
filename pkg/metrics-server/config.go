@@ -15,7 +15,6 @@ package metric_server
 
 import (
 	"fmt"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/component-base/metrics"
 	"time"
 
@@ -69,40 +68,6 @@ func (c Config) Complete() (*MetricsServer, error) {
 	}
 
 
-	pointsAvailable = metrics.NewGaugeFunc(
-		metrics.GaugeOpts{
-			Namespace: "metrics_server",
-			Name:      "points_available",
-			Help:      "Number of metrics points that is available in cluster.",
-		},
-		func() float64 {
-			nodeList, err := corev1.Nodes().Lister().List(nil)
-			if err != nil {
-				return 0
-			}
-			nodeCount := 0
-			for _, node := range nodeList {
-				for _, condition := range node.Status.Conditions {
-					if condition.Type == v1.NodeReady && condition.Status == v1.ConditionTrue {
-						nodeCount += 1
-					}
-				}
-			}
-			podList, err := corev1.Pods().Lister().List(nil)
-			if err != nil {
-				return 0
-			}
-			containerCount := 0
-			for _, pod := range podList {
-				for _, status := range pod.Status.ContainerStatuses {
-					if status.State.Running != nil {
-						containerCount += 1
-					}
-				}
-			}
-			return float64(nodeCount + containerCount)
-		},
-	)
 	return &MetricsServer{
 		syncs:            []cache.InformerSynced{nodes.Informer().HasSynced},
 		informer:         informer,

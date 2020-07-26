@@ -12,7 +12,7 @@ var (
 			Subsystem:         "api",
 			Name:              "metric_latency",
 			Help:              "Latency of metrics exported",
-			Buckets:           metrics.ExponentialBuckets(1, 1.62, 10),
+			Buckets:           metrics.ExponentialBuckets(1, 1.364, 20),
 		},
 	)
 )

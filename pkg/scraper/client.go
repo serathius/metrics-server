@@ -28,6 +28,7 @@ import (
 	"github.com/mailru/easyjson"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/klog"
 
 	"sigs.k8s.io/metrics-server/pkg/utils"
 )
@@ -100,7 +101,7 @@ func (kc *kubeletClient) GetSummary(ctx context.Context, node *corev1.Node) (*Su
 		Path:     "/stats/summary",
 		RawQuery: "only_cpu_and_memory=true",
 	}
-
+	klog.Infof("Request %s", url.String())
 	req, err := http.NewRequest("GET", url.String(), nil)
 	if err != nil {
 		return nil, err
