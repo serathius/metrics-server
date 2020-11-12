@@ -49,16 +49,8 @@ container-%: $(src_deps)
 # Official Container Push Rules
 # -----------------------------
 
-.PHONY: push
-push: $(addprefix sub-push-,$(ALL_ARCHITECTURES)) push-multi-arch;
-
-.PHONY: sub-push-*
-sub-push-%: container-% do-push-% ;
-
-.PHONY: do-push-*
-do-push-%:
-	docker tag $(REGISTRY)/metrics-server-$*:$(GIT_COMMIT) $(REGISTRY)/metrics-server-$*:$(GIT_TAG)
-	docker push $(REGISTRY)/metrics-server-$*:$(GIT_TAG)
+PHONY: push-all
+push-all: $(addprefix sub-push-,$(ALL_ARCHITECTURES)) push-multi-arch;
 
 .PHONY: push-multi-arch
 push-multi-arch:
@@ -66,6 +58,13 @@ push-multi-arch:
 	@for arch in $(ALL_ARCHITECTURES); do docker manifest annotate --arch $${arch} $(REGISTRY)/metrics-server:$(GIT_TAG) $(REGISTRY)/metrics-server-$${arch}:${GIT_TAG}; done
 	docker manifest push --purge $(REGISTRY)/metrics-server:$(GIT_TAG)
 
+.PHONY: push-*
+push-%: container-%
+	docker tag $(REGISTRY)/metrics-server-$*:$(GIT_COMMIT) $(REGISTRY)/metrics-server-$*:$(GIT_TAG)
+	docker push $(REGISTRY)/metrics-server-$*:$(GIT_TAG)
+
+PHONY: push
+push: push-$(ARCH)
 
 # Release rules
 # -------------

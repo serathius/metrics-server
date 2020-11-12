@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	apitypes "k8s.io/apimachinery/pkg/types"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -222,14 +221,7 @@ func addPodMetricsToTable(table *metav1beta1.Table, pods ...metrics.PodMetrics) 
 }
 
 func (m *podMetrics) getPodMetrics(pods ...*v1.Pod) ([]metrics.PodMetrics, error) {
-	namespacedNames := make([]apitypes.NamespacedName, len(pods))
-	for i, pod := range pods {
-		namespacedNames[i] = apitypes.NamespacedName{
-			Name:      pod.Name,
-			Namespace: pod.Namespace,
-		}
-	}
-	timestamps, containerMetrics := m.metrics.GetContainerMetrics(namespacedNames...)
+	timestamps, containerMetrics := m.metrics.GetPodMetrics(pods...)
 	res := make([]metrics.PodMetrics, 0, len(pods))
 
 	for i, pod := range pods {

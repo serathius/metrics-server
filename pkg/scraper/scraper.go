@@ -18,11 +18,11 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	v1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/component-base/metrics"
 	"k8s.io/klog/v2"
@@ -82,11 +82,12 @@ func RegisterScraperMetrics(registrationFunc func(metrics.Registerable) error) e
 	return nil
 }
 
-func NewScraper(nodeLister v1listers.NodeLister, client KubeletInterface, scrapeTimeout time.Duration) *scraper {
+func NewScraper(nodeLister v1listers.NodeLister, client KubeletInterface, scrapeTimeout time.Duration, storage storage.Storage) *scraper {
 	return &scraper{
 		nodeLister:    nodeLister,
 		kubeletClient: client,
 		scrapeTimeout: scrapeTimeout,
+		storage:       storage,
 	}
 }
 
@@ -94,6 +95,7 @@ type scraper struct {
 	nodeLister    v1listers.NodeLister
 	kubeletClient KubeletInterface
 	scrapeTimeout time.Duration
+	storage       storage.Storage
 }
 
 var _ Scraper = (*scraper)(nil)
@@ -105,8 +107,8 @@ type NodeInfo struct {
 	ConnectAddress string
 }
 
-func (c *scraper) Scrape(baseCtx context.Context) (*storage.MetricsBatch, error) {
-	nodes, err := c.nodeLister.List(labels.Everything())
+func (s *scraper) Scrape(baseCtx context.Context) {
+	nodes, err := s.nodeLister.List(labels.Everything())
 	var errs []error
 	if err != nil {
 		// save the error, and continue on in case of partial results
@@ -127,55 +129,41 @@ func (c *scraper) Scrape(baseCtx context.Context) (*storage.MetricsBatch, error)
 		delayMs = maxDelayMs
 	}
 
+	wg := sync.WaitGroup{}
 	for _, node := range nodes {
+		wg.Add(1)
 		go func(node *corev1.Node) {
+			defer wg.Done()
 			// Prevents network congestion.
 			sleepDuration := time.Duration(rand.Intn(delayMs)) * time.Millisecond
 			time.Sleep(sleepDuration)
 			// make the timeout a bit shorter to account for staggering, so we still preserve
 			// the overall timeout
-			ctx, cancelTimeout := context.WithTimeout(baseCtx, c.scrapeTimeout-sleepDuration)
+			ctx, cancelTimeout := context.WithTimeout(baseCtx, s.scrapeTimeout-sleepDuration)
 			defer cancelTimeout()
 
 			klog.V(2).Infof("Querying source: %s", node)
-			metrics, err := c.collectNode(ctx, node)
+			metrics, err := s.collectNode(ctx, node)
 			if err != nil {
-				err = fmt.Errorf("unable to fully scrape metrics from node %s: %v", node.Name, err)
+				klog.Errorf("unable to fully scrape metrics from node %s: %v", node.Name, err)
+				s.storage.Delete(node.Name)
+				// TODO: ensure that key is deleted
+			} else {
+				s.storage.Store(node.Name, metrics)
 			}
-			responseChannel <- metrics
-			errChannel <- err
 		}(node)
 	}
-
-	res := &storage.MetricsBatch{}
-
-	for range nodes {
-		err := <-errChannel
-		srcBatch := <-responseChannel
-		if err != nil {
-			errs = append(errs, err)
-			// NB: partial node results are still worth saving, so
-			// don't skip storing results if we got an error
-		}
-		if srcBatch == nil {
-			continue
-		}
-
-		res.Nodes = append(res.Nodes, srcBatch.Nodes...)
-		res.Pods = append(res.Pods, srcBatch.Pods...)
-	}
-
-	klog.V(1).Infof("ScrapeMetrics: time: %s, nodes: %v, pods: %v", myClock.Since(startTime), len(res.Nodes), len(res.Pods))
-	return res, utilerrors.NewAggregate(errs)
+	wg.Wait()
+	klog.V(1).Infof("ScrapeMetrics: time: %s, nodes: %v", myClock.Since(startTime), len(nodes), )
 }
 
-func (c *scraper) collectNode(ctx context.Context, node *corev1.Node) (*storage.MetricsBatch, error) {
+func (s *scraper) collectNode(ctx context.Context, node *corev1.Node) (*storage.MetricsBatch, error) {
 	startTime := myClock.Now()
 	defer func() {
 		requestDuration.WithLabelValues(node.Name).Observe(float64(myClock.Since(startTime)) / float64(time.Second))
 		lastRequestTime.WithLabelValues(node.Name).Set(float64(myClock.Now().Unix()))
 	}()
-	summary, err := c.kubeletClient.GetSummary(ctx, node)
+	summary, err := s.kubeletClient.GetSummary(ctx, node)
 
 	if err != nil {
 		requestTotal.WithLabelValues("false").Inc()

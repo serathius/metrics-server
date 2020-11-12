@@ -26,65 +26,45 @@ import (
 )
 
 func decodeBatch(summary *Summary) *storage.MetricsBatch {
-	res := &storage.MetricsBatch{
-		Nodes: make([]storage.NodeMetricsPoint, 1),
-		Pods:  make([]storage.PodMetricsPoint, len(summary.Pods)),
-	}
-
-	success := decodeNodeStats(&summary.Node, &res.Nodes[0])
-	if !success {
-		// if we had errors providing node metrics, discard the data point
-		// so that we don't incorrectly report metric values as zero.
-		res.Nodes = res.Nodes[:0]
-	}
-
-	num := 0
+	pods := make([]storage.PodMetricsPoint, 0, len(summary.Pods))
 	for _, pod := range summary.Pods {
-		success := decodePodStats(&pod, &res.Pods[num])
-		if !success {
-			// NB: we explicitly want to discard pods with partial results, since
-			// the horizontal pod autoscaler takes special action when a pod is missing
-			// metrics (and zero CPU or memory does not count as "missing metrics")
-
-			// we don't care if we reuse slots in the result array,
-			// because they get completely overwritten in decodePodStats
-			continue
+		pod := decodePodStats(&pod)
+		if pod != nil {
+			pods = append(pods, *pod)
 		}
-		num++
 	}
-	res.Pods = res.Pods[:num]
-	return res
+	return &storage.MetricsBatch{
+		Pods: pods,
+		Node: decodeNodeStats(&summary.Node),
+	}
 }
 
-func decodeNodeStats(nodeStats *NodeStats, target *storage.NodeMetricsPoint) (success bool) {
+func decodeNodeStats(nodeStats *NodeStats) *storage.NodeMetricsPoint {
 	timestamp, err := getScrapeTime(nodeStats.CPU, nodeStats.Memory)
 	if err != nil {
 		// if we can't get a timestamp, assume bad data in general
 		klog.V(1).Infof("Skip metric for node %q, error: %v", nodeStats.NodeName, err)
-		return false
+		return nil
 	}
-	*target = storage.NodeMetricsPoint{
+	target := storage.NodeMetricsPoint{
 		Name: nodeStats.NodeName,
 		MetricsPoint: storage.MetricsPoint{
 			Timestamp: timestamp,
 		},
 	}
-	success = true
 	if err := decodeCPU(&target.CpuUsage, nodeStats.CPU); err != nil {
 		klog.V(1).Infof("Skip CPU metric for node %q, error %v", nodeStats.NodeName, err)
-		success = false
+		return nil
 	}
 	if err := decodeMemory(&target.MemoryUsage, nodeStats.Memory); err != nil {
 		klog.V(1).Infof("Skip Memory metric for node %q, error %v", nodeStats.NodeName, err)
-		success = false
+		return nil
 	}
-	return success
+	return &target
 }
 
-func decodePodStats(podStats *PodStats, target *storage.PodMetricsPoint) (success bool) {
-	success = true
-	// completely overwrite data in the target
-	*target = storage.PodMetricsPoint{
+func decodePodStats(podStats *PodStats) *storage.PodMetricsPoint {
+	target := storage.PodMetricsPoint{
 		Name:       podStats.PodRef.Name,
 		Namespace:  podStats.PodRef.Namespace,
 		Containers: make([]storage.ContainerMetricsPoint, len(podStats.Containers)),
@@ -94,8 +74,7 @@ func decodePodStats(podStats *PodStats, target *storage.PodMetricsPoint) (succes
 		if err != nil {
 			// if we can't get a timestamp, assume bad data in general
 			klog.V(1).Infof("Skip container %q in pod %s/%s, error: %v", container.Name, target.Namespace, target.Name, err)
-			success = false
-			continue
+			return nil
 		}
 		point := storage.ContainerMetricsPoint{
 			Name: container.Name,
@@ -105,16 +84,16 @@ func decodePodStats(podStats *PodStats, target *storage.PodMetricsPoint) (succes
 		}
 		if err = decodeCPU(&point.CpuUsage, container.CPU); err != nil {
 			klog.V(1).Infof("Skip CPU metric for container %q in pod %s/%s, error: %v", container.Name, target.Namespace, target.Name, err)
-			success = false
+			return nil
 		}
 		if err = decodeMemory(&point.MemoryUsage, container.Memory); err != nil {
 			klog.V(1).Infof("Skip Memory metric for container %q in pod %s/%s, error: %v", container.Name, target.Namespace, target.Name, err)
-			success = false
+			return nil
 		}
 
 		target.Containers[i] = point
 	}
-	return success
+	return &target
 }
 
 func decodeCPU(target *resource.Quantity, cpuStats *CPUStats) error {

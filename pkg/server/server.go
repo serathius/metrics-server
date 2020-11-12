@@ -28,7 +28,6 @@ import (
 	"k8s.io/klog/v2"
 
 	"sigs.k8s.io/metrics-server/pkg/scraper"
-	"sigs.k8s.io/metrics-server/pkg/storage"
 	"sigs.k8s.io/metrics-server/pkg/utils"
 )
 
@@ -56,13 +55,12 @@ func RegisterServerMetrics(registrationFunc func(metrics.Registerable) error, re
 
 func NewServer(
 	sync cache.InformerSynced, informer informers.SharedInformerFactory,
-	apiserver *genericapiserver.GenericAPIServer, storage storage.Storage,
+	apiserver *genericapiserver.GenericAPIServer,
 	scraper scraper.Scraper, resolution time.Duration) *server {
 	return &server{
 		sync:             sync,
 		informer:         informer,
 		GenericAPIServer: apiserver,
-		storage:          storage,
 		scraper:          scraper,
 		resolution:       resolution,
 		tickLastStart:    time.Now(),
@@ -77,7 +75,6 @@ type server struct {
 	sync     cache.InformerSynced
 	informer informers.SharedInformerFactory
 
-	storage    storage.Storage
 	scraper    scraper.Scraper
 	resolution time.Duration
 
@@ -127,16 +124,7 @@ func (s *server) tick(ctx context.Context, startTime time.Time) {
 	defer cancelTimeout()
 
 	klog.V(6).Infof("Beginning cycle, scraping metrics...")
-	data, scrapeErr := s.scraper.Scrape(ctx)
-	if scrapeErr != nil {
-		klog.Errorf("unable to fully scrape metrics: %v", scrapeErr)
-		if len(data.Nodes) == 0 {
-			tickOK = false
-		}
-	}
-
-	klog.V(6).Infof("...Storing metrics...")
-	s.storage.Store(data)
+	s.scraper.Scrape(ctx)
 
 	collectTime := time.Since(startTime)
 	tickDuration.Observe(float64(collectTime) / float64(time.Second))

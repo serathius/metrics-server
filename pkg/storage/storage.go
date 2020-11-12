@@ -15,12 +15,11 @@
 package storage
 
 import (
+	"sort"
 	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apitypes "k8s.io/apimachinery/pkg/types"
-	"k8s.io/klog/v2"
 	"k8s.io/metrics/pkg/apis/metrics"
 
 	"sigs.k8s.io/metrics-server/pkg/api"
@@ -34,9 +33,7 @@ var kubernetesCadvisorWindow = 30 * time.Second
 
 // storage is a thread save storage for node and pod metrics
 type storage struct {
-	mu    sync.RWMutex
-	nodes map[string]NodeMetricsPoint
-	pods  map[apitypes.NamespacedName]PodMetricsPoint
+	metrics sync.Map
 }
 
 var _ Storage = (*storage)(nil)
@@ -48,18 +45,16 @@ func NewStorage() *storage {
 // TODO(directxman12): figure out what the right value is for "window" --
 // we don't get the actual window from cAdvisor, so we could just
 // plumb down metric resolution, but that wouldn't be actually correct.
-func (p *storage) GetNodeMetrics(nodes ...string) ([]api.TimeInfo, []corev1.ResourceList) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
+func (s *storage) GetNodeMetrics(nodes ...*corev1.Node) ([]api.TimeInfo, []corev1.ResourceList) {
 	timestamps := make([]api.TimeInfo, len(nodes))
 	resMetrics := make([]corev1.ResourceList, len(nodes))
 
 	for i, node := range nodes {
-		metricPoint, present := p.nodes[node]
-		if !present {
+		value, ok := s.metrics.Load(node.Name)
+		if !ok {
 			continue
 		}
+		metricPoint := value.(*MetricsBatch).Node
 
 		timestamps[i] = api.TimeInfo{
 			Timestamp: metricPoint.Timestamp,
@@ -74,22 +69,31 @@ func (p *storage) GetNodeMetrics(nodes ...string) ([]api.TimeInfo, []corev1.Reso
 	return timestamps, resMetrics
 }
 
-func (p *storage) GetContainerMetrics(pods ...apitypes.NamespacedName) ([]api.TimeInfo, [][]metrics.ContainerMetrics) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
+func (s *storage) GetPodMetrics(pods ...*corev1.Pod) ([]api.TimeInfo, [][]metrics.ContainerMetrics) {
 	timestamps := make([]api.TimeInfo, len(pods))
 	resMetrics := make([][]metrics.ContainerMetrics, len(pods))
 
+
 	for i, pod := range pods {
-		metricPoint, present := p.pods[pod]
-		if !present {
+		value, ok := s.metrics.Load(pod.Spec.NodeName)
+		if !ok {
+			continue
+		}
+		points := value.(*MetricsBatch).Pods
+		pos := sort.Search(len(points), func(i int) bool {
+			return points[i].Namespace > pod.Namespace || (points[i].Namespace == pod.Namespace && points[i].Name >= pod.Name)
+		})
+		if pos >= len(points) {
+			continue
+		}
+		metric := points[pos]
+		if metric.Namespace != pod.Namespace || metric.Name != pod.Name {
 			continue
 		}
 
-		contMetrics := make([]metrics.ContainerMetrics, len(metricPoint.Containers))
+		contMetrics := make([]metrics.ContainerMetrics, len(metric.Containers))
 		var earliestTS *time.Time
-		for i, contPoint := range metricPoint.Containers {
+		for i, contPoint := range metric.Containers {
 			contMetrics[i] = metrics.ContainerMetrics{
 				Name: contPoint.Name,
 				Usage: corev1.ResourceList{
@@ -115,34 +119,20 @@ func (p *storage) GetContainerMetrics(pods ...apitypes.NamespacedName) ([]api.Ti
 	return timestamps, resMetrics
 }
 
-func (p *storage) Store(batch *MetricsBatch) {
-	newNodes := make(map[string]NodeMetricsPoint, len(batch.Nodes))
-	var nodeCount, containerCount int
-	for _, nodePoint := range batch.Nodes {
-		if _, exists := newNodes[nodePoint.Name]; exists {
-			klog.Errorf("duplicate node %s received", nodePoint.Name)
-			continue
+func (s *storage) Store(nodeName string, batch *MetricsBatch) {
+	sort.Slice(batch.Pods, func(i, j int) bool {
+		if batch.Pods[i].Namespace != batch.Pods[j].Namespace {
+			return batch.Pods[i].Namespace < batch.Pods[j].Namespace
 		}
-		nodeCount += 1
-		newNodes[nodePoint.Name] = nodePoint
-	}
+		return batch.Pods[i].Name < batch.Pods[j].Name
+	})
+	s.metrics.Store(nodeName, batch)
+	//pointsstored.withlabelvalues("node").set(float64(nodecount))
+	//pointsstored.withlabelvalues("container").set(float64(containercount))
+}
 
-	newPods := make(map[apitypes.NamespacedName]PodMetricsPoint, len(batch.Pods))
-	for _, podPoint := range batch.Pods {
-		podIdent := apitypes.NamespacedName{Name: podPoint.Name, Namespace: podPoint.Namespace}
-		if _, exists := newPods[podIdent]; exists {
-			klog.Errorf("duplicate pod %s received", podIdent)
-			continue
-		}
-		containerCount += len(podPoint.Containers)
-		newPods[podIdent] = podPoint
-	}
-
-	pointsStored.WithLabelValues("node").Set(float64(nodeCount))
-	pointsStored.WithLabelValues("container").Set(float64(containerCount))
-	p.mu.Lock()
-	p.nodes = newNodes
-	p.pods = newPods
-	p.mu.Unlock()
-
+func (s *storage) Delete(nodeName string) {
+	s.metrics.Delete(nodeName)
+	//pointsstored.withlabelvalues("node").set(float64(nodecount))
+	//pointsstored.withlabelvalues("container").set(float64(containercount))
 }

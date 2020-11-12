@@ -49,7 +49,8 @@ func (c Config) Complete() (*server, error) {
 		return nil, fmt.Errorf("unable to construct a client to connect to the kubelets: %v", err)
 	}
 	nodes := informer.Core().V1().Nodes()
-	scrape := scraper.NewScraper(nodes.Lister(), kubeletClient, c.ScrapeTimeout)
+	store := storage.NewStorage()
+	scrape := scraper.NewScraper(nodes.Lister(), kubeletClient, c.ScrapeTimeout, store)
 
 	// Disable default metrics handler and create custom one
 	c.Apiserver.EnableMetrics = false
@@ -64,7 +65,6 @@ func (c Config) Complete() (*server, error) {
 	}
 	genericServer.Handler.NonGoRestfulMux.HandleFunc("/metrics", metricsHandler)
 
-	store := storage.NewStorage()
 	if err := api.Install(store, informer.Core().V1(), genericServer); err != nil {
 		return nil, err
 	}
@@ -72,7 +72,6 @@ func (c Config) Complete() (*server, error) {
 		nodes.Informer().HasSynced,
 		informer,
 		genericServer,
-		store,
 		scrape,
 		c.MetricResolution,
 	), nil

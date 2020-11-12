@@ -37,6 +37,7 @@ deploy_metrics_server(){
   kubectl apply -k manifests/test
   # Apply patch to use provided image
   kubectl -n kube-system patch deployment metrics-server --patch "{\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": \"metrics-server\", \"image\": \"${IMAGE}\"}]}}}}"
+  kubectl -n kube-system delete pod -l k8s-app=metrics-server
 }
 
 wait_for_metrics_server_ready() {
@@ -51,9 +52,6 @@ run_tests() {
 }
 
 setup_kind
-trap delete_cluster EXIT
-delete_cluster
-create_cluster
 deploy_metrics_server
 wait_for_metrics_server_ready
 run_tests

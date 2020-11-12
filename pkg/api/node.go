@@ -100,25 +100,35 @@ func (m *nodeMetrics) List(ctx context.Context, options *metainternalversion.Lis
 		nodes = newNodes
 	}
 
-	names := make([]string, len(nodes))
-	for i, node := range nodes {
-		names[i] = node.Name
-	}
-	// maintain the same ordering invariant as the Kube API would over nodes
-	sort.Strings(names)
-
-	metricsItems, err := m.getNodeMetrics(names...)
+	metricsItems, err := m.getNodeMetrics(nodes...)
 	if err != nil {
 		errMsg := fmt.Errorf("Error while fetching node metrics for selector %v: %v", labelSelector, err)
 		klog.Error(errMsg)
 		return &metrics.NodeMetricsList{}, errMsg
 	}
+	// maintain the same ordering invariant as the Kube API would over nodes
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].Name < nodes[j].Name
+	})
 
 	return &metrics.NodeMetricsList{Items: metricsItems}, nil
 }
 
 func (m *nodeMetrics) Get(ctx context.Context, name string, opts *metav1.GetOptions) (runtime.Object, error) {
-	nodeMetrics, err := m.getNodeMetrics(name)
+	node, err := m.nodeLister.Get(name)
+	if err != nil {
+		errMsg := fmt.Errorf("Error while getting node %v: %v", name, err)
+		klog.Error(errMsg)
+		if errors.IsNotFound(err) {
+			// return not-found errors directly
+			return &metrics.NodeMetrics{}, err
+		}
+		return &metrics.NodeMetrics{}, errMsg
+	}
+	if node == nil {
+		return &metrics.NodeMetrics{}, errors.NewNotFound(v1.Resource("nodes"), name)
+	}
+	nodeMetrics, err := m.getNodeMetrics(node)
 	if err == nil && len(nodeMetrics) == 0 {
 		err = fmt.Errorf("no metrics known for node %q", name)
 	}
@@ -188,17 +198,17 @@ func addNodeMetricsToTable(table *metav1beta1.Table, nodes ...metrics.NodeMetric
 	}
 }
 
-func (m *nodeMetrics) getNodeMetrics(names ...string) ([]metrics.NodeMetrics, error) {
-	timestamps, usages := m.metrics.GetNodeMetrics(names...)
-	res := make([]metrics.NodeMetrics, 0, len(names))
+func (m *nodeMetrics) getNodeMetrics(nodes ...*v1.Node) ([]metrics.NodeMetrics, error) {
+	timestamps, usages := m.metrics.GetNodeMetrics(nodes...)
+	res := make([]metrics.NodeMetrics, 0, len(nodes))
 
-	for i, name := range names {
+	for i, node := range nodes {
 		if usages[i] == nil {
 			continue
 		}
 		res = append(res, metrics.NodeMetrics{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:              name,
+				Name:              node.Name,
 				CreationTimestamp: metav1.NewTime(myClock.Now()),
 			},
 			Timestamp: metav1.NewTime(timestamps[i].Timestamp),

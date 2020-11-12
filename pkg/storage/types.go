@@ -22,7 +22,7 @@ import (
 
 // MetricsBatch is a single batch of pod, container, and node metrics from some source.
 type MetricsBatch struct {
-	Nodes []NodeMetricsPoint
+	Node  *NodeMetricsPoint
 	Pods  []PodMetricsPoint
 }
 
