@@ -3,6 +3,7 @@ module sigs.k8s.io/metrics-server
 go 1.14
 
 require (
+	cloud.google.com/go v0.54.0 // indirect
 	github.com/go-openapi/spec v0.19.8
 	github.com/go-openapi/swag v0.19.9 // indirect
 	github.com/google/addlicense v0.0.0-20200906110928-a0294312aa76
