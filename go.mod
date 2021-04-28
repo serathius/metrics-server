@@ -3,6 +3,7 @@ module sigs.k8s.io/metrics-server
 go 1.16
 
 require (
+	cloud.google.com/go v0.54.0
 	github.com/go-openapi/spec v0.20.3
 	github.com/google/addlicense v0.0.0-20200906110928-a0294312aa76
 	github.com/google/go-cmp v0.5.5

@@ -21,6 +21,7 @@ import (
 
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/component-base/logs"
+	"cloud.google.com/go/profiler"
 
 	"sigs.k8s.io/metrics-server/cmd/metrics-server/app"
 )
@@ -32,6 +33,14 @@ func main() {
 	if len(os.Getenv("GOMAXPROCS")) == 0 {
 		runtime.GOMAXPROCS(runtime.NumCPU())
 	}
+	cfg := profiler.Config{
+                Service:        "metrics-server",
+                ServiceVersion: "0.5.0",
+        }
+
+        if err := profiler.Start(cfg); err != nil {
+		panic(err)
+        }
 
 	cmd := app.NewMetricsServerCommand(genericapiserver.SetupSignalHandler())
 	cmd.Flags().AddGoFlagSet(flag.CommandLine)
