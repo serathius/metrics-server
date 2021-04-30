@@ -36,8 +36,7 @@ import (
 // cumulative metrics assumes that the time window is different from 0.
 type storage struct {
 	mu        sync.RWMutex
-	nodes     map[string]NodeMetricsPoint
-	prevNodes map[string]NodeMetricsPoint
+	nodes     map[string]storedMetric
 	pods      map[apitypes.NamespacedName][]ContainerMetricsPoint
 	prevPods  map[apitypes.NamespacedName][]ContainerMetricsPoint
 }
@@ -45,7 +44,9 @@ type storage struct {
 var _ Storage = (*storage)(nil)
 
 func NewStorage() *storage {
-	return &storage{}
+	return &storage{
+		nodes: map[string]storedMetric{},
+	}
 }
 
 // Ready returns true if metrics-server's storage has accumulated enough metric
@@ -58,37 +59,28 @@ func (p *storage) Ready() bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	return len(p.prevNodes) != 0
+	for _, m := range p.nodes {
+		if !m.ready() {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *storage) GetNodeMetrics(nodes ...string) ([]api.TimeInfo, []corev1.ResourceList, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	timestamps := make([]api.TimeInfo, len(nodes))
-	resMetrics := make([]corev1.ResourceList, len(nodes))
+	ts := make([]api.TimeInfo, len(nodes))
+	ms := make([]corev1.ResourceList, len(nodes))
 	for i, node := range nodes {
-		metricPoint, found := p.nodes[node]
-		if !found {
+		m, found := p.nodes[node]
+		if !found || !m.ready() {
 			continue
 		}
-
-		prevMetricPoint, found := p.prevNodes[node]
-		if !found {
-			continue
-		}
-
-		cpuUsage := cpuUsageOverTime(metricPoint.MetricsPoint, prevMetricPoint.MetricsPoint)
-		resMetrics[i] = corev1.ResourceList{
-			corev1.ResourceName(corev1.ResourceCPU):    cpuUsage,
-			corev1.ResourceName(corev1.ResourceMemory): metricPoint.MemoryUsage,
-		}
-		timestamps[i] = api.TimeInfo{
-			Timestamp: metricPoint.Timestamp,
-			Window:    metricPoint.Timestamp.Sub(prevMetricPoint.Timestamp),
-		}
+		ms[i], ts[i] = m.usage()
 	}
-	return timestamps, resMetrics, nil
+	return ts, ms, nil
 }
 
 func (p *storage) GetContainerMetrics(pods ...apitypes.NamespacedName) ([]api.TimeInfo, [][]metrics.ContainerMetrics, error) {
@@ -154,30 +146,26 @@ func (p *storage) storeNodeMetrics(nodes []NodeMetricsPoint) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	newNodes := make(map[string]NodeMetricsPoint, len(nodes))
-	prevNodes := make(map[string]NodeMetricsPoint, len(nodes))
+	toDelete := make(map[string]struct{}, len(p.nodes))
+	for node := range p.nodes {
+		toDelete[node] = struct{}{}
+	}
+	var nodeCount float64
 	for _, nodePoint := range nodes {
-		newNodes[nodePoint.Name] = nodePoint
-
-		// If the new point is newer than the one stored for the container, move
-		// it to the list of the previous points.
-		// This check also prevents from updating the store if the same metric
-		// point was scraped twice.
-		storedNodePoint, found := p.nodes[nodePoint.Name]
-		if found && nodePoint.Timestamp.After(storedNodePoint.Timestamp) {
-			prevNodes[nodePoint.Name] = storedNodePoint
-		} else {
-			prevNodePoint, found := p.prevNodes[nodePoint.Name]
-			if found {
-				prevNodes[nodePoint.Name] = prevNodePoint
-			}
+		delete(toDelete, nodePoint.Name)
+		node := p.nodes[nodePoint.Name]
+		node.merge(nodePoint.MetricsPoint)
+		p.nodes[nodePoint.Name] = node
+		if node.ready() {
+			nodeCount+=1
 		}
 	}
-	p.nodes = newNodes
-	p.prevNodes = prevNodes
+	for node := range toDelete {
+		delete(p.nodes, node)
+	}
 
 	// Only count nodes for which metrics can be returned.
-	pointsStored.WithLabelValues("node").Set(float64(len(prevNodes)))
+	pointsStored.WithLabelValues("node").Set(nodeCount)
 }
 
 func (p *storage) storePodMetrics(pods []PodMetricsPoint) {
@@ -251,4 +239,41 @@ func cpuUsageOverTime(metricPoint, prevMetricPoint MetricsPoint) resource.Quanti
 	prevCPUUsageScaled := prevMetricPoint.CpuUsage.ScaledValue(-9)
 	cpuUsage := float64(cpuUsageScaled-prevCPUUsageScaled) / window
 	return *resource.NewScaledQuantity(int64(cpuUsage), -9)
+}
+
+type storedMetric struct {
+	index       int
+	timestamp   [2]time.Time
+	memoryUsage resource.Quantity
+	cpuUsage    [2]resource.Quantity
+}
+
+func (m storedMetric) usage() (corev1.ResourceList, api.TimeInfo)  {
+	current := m.index
+	prev := (m.index + 1) % 2
+
+	window := m.timestamp[current].Sub(m.timestamp[prev])
+	cpuUsageScaled := m.cpuUsage[current].ScaledValue(-9)
+	prevCPUUsageScaled := m.cpuUsage[prev].ScaledValue(-9)
+	cpuUsage := float64(cpuUsageScaled-prevCPUUsageScaled) / window.Seconds()
+	return corev1.ResourceList{
+			corev1.ResourceCPU:    *resource.NewScaledQuantity(int64(cpuUsage), -9),
+			corev1.ResourceMemory: m.memoryUsage,
+		}, api.TimeInfo{
+			Timestamp: m.timestamp[current],
+			Window:    window,
+		}
+}
+
+func (m *storedMetric) merge(p MetricsPoint) {
+	if m.timestamp[m.index].IsZero() || p.Timestamp.After(m.timestamp[m.index]) {
+		m.index = (m.index + 1) % 2
+		m.timestamp[m.index] = p.Timestamp
+		m.cpuUsage[m.index] = p.CpuUsage
+		m.memoryUsage = p.MemoryUsage
+	}
+}
+
+func (m storedMetric) ready() bool {
+	return !m.timestamp[0].IsZero() && !m.timestamp[1].IsZero()
 }
