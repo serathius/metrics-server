@@ -326,6 +326,53 @@ var _ = Describe("In-memory storage", func() {
 		Expect(containerMetrics).To(Equal([][]metrics.ContainerMetrics{nil}))
 	})
 
+	It("should handle container introduced in last scrape", func() {
+		pod := apitypes.NamespacedName{Name: batch.Pods[0].Name, Namespace: batch.Pods[0].Namespace}
+		newContainer := ContainerMetricsPoint{
+			Name:         "container3",
+			MetricsPoint: newMetricsPoint(now.Add(900*time.Millisecond), 910, 920),
+		}
+
+		By("adding a new container to the first pod")
+		batch.Pods[0].Containers = append(batch.Pods[0].Containers, newContainer)
+
+		By("storing the batch")
+		storage.Store(batch)
+
+		By("fetching the pod")
+		_, containerMetrics, err := storage.GetContainerMetrics(pod)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("verifying original containers metrics are present")
+		Expect(containerMetrics).To(HaveLen(1))
+		Expect(containerNames(containerMetrics[0])).To(BeEquivalentTo([]string{"container1", "container2"}))
+
+		By("verifying that new container metric is stored internally")
+		containers := storage.pods[pod]
+		Expect(containers).To(HaveLen(3))
+	})
+
+	It("should skip container when a it was removed in the last scrape", func() {
+		pod := apitypes.NamespacedName{Name: batch.Pods[0].Name, Namespace: batch.Pods[0].Namespace}
+		By("removing the container from the batch")
+		batch.Pods[0].Containers = batch.Pods[0].Containers[1:]
+
+		By("storing the batch")
+		storage.Store(batch)
+
+		By("fetching the pod without container")
+		_, containerMetrics, err := storage.GetContainerMetrics(pod)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("verifying that the removed container metric is missing")
+		Expect(containerMetrics).To(HaveLen(1))
+		Expect(containerNames(containerMetrics[0])).To(BeEquivalentTo([]string{"container2"}))
+
+		By("verifying that removed container metric is not stored internally")
+		containers := storage.pods[pod]
+		Expect(containers).To(HaveLen(1))
+	})
+
 	It("shoudln't update the store if the last 2 pod metric points were equal", func() {
 		By("replacing metric points from the new batch by their previous values")
 		batch.Pods[0] = prevBatch.Pods[0]
@@ -496,3 +543,11 @@ var _ = Describe("In-memory storage", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 })
+
+func containerNames(cs []metrics.ContainerMetrics) []string {
+	names := make([]string, len(cs))
+	for i := range cs {
+		names[i] = cs[i].Name
+	}
+	return names
+}
